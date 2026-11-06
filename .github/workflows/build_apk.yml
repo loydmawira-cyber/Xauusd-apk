@@ -40,7 +40,6 @@ jobs:
     name: Build APK (${{ github.event.inputs.build_type || 'debug' }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     env:
       RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
       RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
@@ -53,16 +52,18 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Set up JDK 17
+      - name: Set up JDK 17 (Temurin)
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '17'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
 
-      - name: Set up Gradle
+      - name: Set up Gradle Action
         uses: gradle/actions/setup-gradle@v4
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
@@ -73,7 +74,6 @@ jobs:
       - name: Prepare Environment and Keystore
         run: |
           echo "Setting up local environment configurations..."
-
           if [ ! -f ".env" ] && [ -f ".env.example" ]; then
             cp .env.example .env
             echo "Created .env from .env.example"
@@ -84,69 +84,55 @@ jobs:
             echo "Decoded debug.keystore from base64 representation."
           fi
 
-      - name: Prepare Release Signing
+      - name: Prepare Release Signing (Optional)
         id: release_keystore
         if: env.RELEASE_KEYSTORE_BASE64 != ''
         run: |
           echo "Decoding release signing keystore from secret..."
-
           echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > release.keystore
-
-          echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/release.keystore" >> "$GITHUB_ENV"
-          echo "STORE_PASSWORD=$RELEASE_STORE_PASSWORD" >> "$GITHUB_ENV"
-          echo "KEY_ALIAS=$RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
-          echo "KEY_PASSWORD=$RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
-
-          echo "has_release_signing=true" >> "$GITHUB_OUTPUT"
+          echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/release.keystore" >> $GITHUB_ENV
+          echo "STORE_PASSWORD=$RELEASE_STORE_PASSWORD" >> $GITHUB_ENV
+          echo "KEY_ALIAS=$RELEASE_KEY_ALIAS" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=$RELEASE_KEY_PASSWORD" >> $GITHUB_ENV
+          echo "has_release_signing=true" >> $GITHUB_OUTPUT
 
       - name: Run Unit Tests
-        if: ${{ github.event.inputs.run_tests != 'false' }}
+        if: "${{ github.event.inputs.run_tests != false }}"
         run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
 
       - name: Build Debug APK
-        if: ${{ github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' || github.event.inputs.build_type == '' }}
+        if: "${{ github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' || github.event.inputs.build_type == null }}"
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
       - name: Build Release APK
-        if: ${{ (github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both') && steps.release_keystore.outputs.has_release_signing == 'true' }}
+        if: "${{ (github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both') && steps.release_keystore.outputs.has_release_signing == 'true' }}"
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
-      - name: Build Unsigned Release APK
-        if: ${{ (github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both') && steps.release_keystore.outputs.has_release_signing != 'true' }}
+      - name: Build Unsigned Release APK (Fallback when no release secret)
+        if: "${{ (github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both') && steps.release_keystore.outputs.has_release_signing != 'true' }}"
         run: |
-          echo "No release keystore secret configured."
-          echo "Building unsigned release APK..."
-
-          ./gradlew :app:assembleRelease \
-            -Pandroid.injected.signing.store.file="" \
-            --no-daemon \
-            --stacktrace \
-            || ./gradlew :app:assembleDebug --no-daemon
+          echo "No release keystore secret configured; building unsigned release APK..."
+          ./gradlew :app:assembleRelease -Pandroid.injected.signing.store.file="" --no-daemon --stacktrace || ./gradlew :app:assembleDebug --no-daemon
 
       - name: Organize Artifacts
+        id: organize_apks
         run: |
           mkdir -p artifacts
-
-          cp -v app/build/outputs/apk/*/*/*.apk artifacts/ 2>/dev/null \
-            || cp -v app/build/outputs/apk/*/*.apk artifacts/ 2>/dev/null \
-            || true
-
+          cp -v app/build/outputs/apk/*/*/*.apk artifacts/ 2>/dev/null || cp -v app/build/outputs/apk/*/*.apk artifacts/ 2>/dev/null || true
           ls -la artifacts/
 
       - name: Generate Build Summary
         run: |
-          echo "### XAU Pilot Android APK Build Summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Artifact Name | Size | SHA-256 Checksum |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
-
+          echo "### 📱 XAU Pilot Android APK Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact Name | Size (MB) | SHA-256 Checksum |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
           for file in artifacts/*.apk; do
             if [ -f "$file" ]; then
               fname=$(basename "$file")
               fsize=$(ls -lh "$file" | awk '{print $5}')
               fsha=$(sha256sum "$file" | awk '{print $1}')
-
-              echo "| \`$fname\` | $fsize | \`$fsha\` |" >> "$GITHUB_STEP_SUMMARY"
+              echo "| \`$fname\` | $fsize | \`$fsha\` |" >> $GITHUB_STEP_SUMMARY
             fi
           done
 
