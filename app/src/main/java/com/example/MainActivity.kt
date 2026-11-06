@@ -26,6 +26,7 @@ import com.example.ui.screens.marketplace.MarketplaceScreen
 import com.example.ui.screens.positions.PositionsScreen
 import com.example.ui.screens.profile.BridgeGuideScreen
 import com.example.ui.screens.profile.ProfileScreen
+import com.example.ui.screens.profile.PublisherWorkspaceScreen
 import com.example.ui.screens.risk.RiskManagementScreen
 import com.example.ui.screens.settings_ea.EaSettingsScreen
 import com.example.ui.screens.vps.VpsManagementScreen
@@ -103,6 +104,7 @@ fun MainAppContent(viewModel: XauPilotViewModel) {
                         is ScreenDestination.VpsManagement -> tab.destination == ScreenDestination.Accounts
                         is ScreenDestination.RiskManagement -> tab.destination == ScreenDestination.Accounts
                         is ScreenDestination.BridgeGuide -> tab.destination == ScreenDestination.Profile
+                        is ScreenDestination.PublisherWorkspace -> tab.destination == ScreenDestination.Profile
                         else -> false
                     }
 
@@ -150,6 +152,7 @@ fun MainAppContent(viewModel: XauPilotViewModel) {
                 is ScreenDestination.RiskManagement -> RiskManagementScreen(viewModel = viewModel)
                 is ScreenDestination.Profile -> ProfileScreen(viewModel = viewModel)
                 is ScreenDestination.BridgeGuide -> BridgeGuideScreen(viewModel = viewModel)
+                is ScreenDestination.PublisherWorkspace -> PublisherWorkspaceScreen(viewModel = viewModel)
                 else -> HomeScreen(viewModel = viewModel)
             }
         }
