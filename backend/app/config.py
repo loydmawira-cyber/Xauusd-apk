@@ -1,4 +1,5 @@
 import os
+import secrets
 from typing import List
 
 class Settings:
@@ -9,12 +10,13 @@ class Settings:
     
     # Database
     DATABASE_URL: str = os.getenv(
-        "DATABASE_URL", 
-        "postgresql://xau_user:xau_secure_pass_2026@localhost:5432/xau_pilot_db"
+        "DATABASE_URL",
+        "postgresql://xau_user@localhost:5432/xau_pilot_db"
     )
     
     # Security & JWT
-    JWT_SECRET: str = os.getenv("JWT_SECRET", "xau_prod_jwt_super_secret_key_change_in_production_998124")
+    # Local development gets an ephemeral key; production must set JWT_SECRET explicitly.
+    JWT_SECRET: str = os.getenv("JWT_SECRET") or secrets.token_urlsafe(48)
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 # 24 hours
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
