@@ -37,4 +37,14 @@ class Settings:
     DEFAULT_MAX_SPREAD_POINTS: float = 35.0
     DEFAULT_MIN_MARGIN_LEVEL: float = 200.0
 
+    # Hosting adapter. Dry-run is mandatory by default to prevent accidental cloud spend.
+    HOSTING_PROVIDER: str = os.getenv("HOSTING_PROVIDER", "simulator")
+    HOSTING_DRY_RUN: bool = os.getenv("HOSTING_DRY_RUN", "true").lower() == "true"
+    AWS_REGION: str = os.getenv("AWS_REGION", "us-east-1")
+    AWS_AMI_ID: str = os.getenv("AWS_AMI_ID", "")
+    AWS_INSTANCE_TYPE: str = os.getenv("AWS_INSTANCE_TYPE", "t3.medium")
+    AWS_SUBNET_ID: str = os.getenv("AWS_SUBNET_ID", "")
+    AWS_SECURITY_GROUP_ID: str = os.getenv("AWS_SECURITY_GROUP_ID", "")
+    AWS_IAM_INSTANCE_PROFILE: str = os.getenv("AWS_IAM_INSTANCE_PROFILE", "")
+
 settings = Settings()

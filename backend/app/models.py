@@ -221,6 +221,24 @@ class Command(Base):
     tenant = relationship("Tenant", back_populates="commands")
     installation = relationship("EaInstallation", back_populates="commands")
 
+class HostingJob(Base):
+    __tablename__ = "hosting_jobs"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    installation_id = Column(String(36), ForeignKey("ea_installations.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider = Column(String(40), nullable=False)
+    action = Column(String(40), nullable=False, default="PROVISION_HOST")
+    status = Column(String(30), nullable=False, default="QUEUED")
+    region = Column(String(60), nullable=False)
+    provider_instance_id = Column(String(120), nullable=True)
+    request_payload = Column(Text, nullable=False, default="{}")
+    result_payload = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
 class Position(Base):
     __tablename__ = "positions"
 
