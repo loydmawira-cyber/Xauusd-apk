@@ -16,6 +16,9 @@ interface ApiService {
     @POST("auth/refresh")
     suspend fun refreshSession(@Body body: Map<String, String>): Response<AuthSession>
 
+    @POST("auth/logout")
+    suspend fun logout(): Response<Unit>
+
     @GET("users/me")
     suspend fun getCurrentUser(): Response<User>
 
@@ -77,7 +80,7 @@ interface ApiService {
     suspend fun getInputDefinitions(@Path("id") id: String): Response<List<ParameterDefinition>>
 
     @GET("ea-installations/{id}/configuration")
-    suspend fun getCurrentConfiguration(@Path("id") id: String): Response<Map<String, String>>
+    suspend fun getCurrentConfiguration(@Path("id") id: String): Response<Map<String, Any>>
 
     @PUT("ea-installations/{id}/configuration")
     suspend fun updateConfiguration(

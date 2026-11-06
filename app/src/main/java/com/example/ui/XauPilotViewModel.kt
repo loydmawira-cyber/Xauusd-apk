@@ -52,6 +52,11 @@ class XauPilotViewModel(
     val notifications = repository.notifications
     val apiSettings = repository.apiSettings
     val authSession = repository.authSession
+    val backendSyncStatus = repository.backendSyncStatus
+
+    fun refreshBackend() {
+        repository.syncFromBackend()
+    }
 
     // Temporary draft values while in EA Settings screen
     private val _draftConfigValues = MutableStateFlow<Map<String, String>>(emptyMap())

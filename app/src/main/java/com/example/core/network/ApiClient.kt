@@ -9,20 +9,42 @@ import java.util.concurrent.TimeUnit
 object ApiClient {
     private var baseUrl = "https://api.xaupilot.com/api/v1/"
     private var authToken: String? = null
+    private var currentRetrofit: Retrofit? = null
+    private var cachedApiService: ApiService? = null
 
     fun setAuthToken(token: String?) {
         this.authToken = token
     }
 
+    fun getAuthToken(): String? = authToken
+
     fun setBaseUrl(url: String) {
-        this.baseUrl = if (url.endsWith("/")) url else "$url/"
+        val sanitized = if (url.endsWith("/")) url else "$url/"
+        if (this.baseUrl != sanitized) {
+            this.baseUrl = sanitized
+            currentRetrofit = null
+            cachedApiService = null
+        }
     }
 
-    private val okHttpClient by lazy {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+    fun getBaseUrl(): String = baseUrl
+
+    private fun buildOkHttpClient(): OkHttpClient {
+        // Redact sensitive headers in network logs
+        val logging = HttpLoggingInterceptor { message ->
+            val sanitized = if (message.startsWith("Authorization:", ignoreCase = true)) {
+                "Authorization: Bearer [REDACTED_SECURE_TOKEN]"
+            } else if (message.contains("password", ignoreCase = true)) {
+                "[PAYLOAD REDACTED FOR SECURITY]"
+            } else {
+                message
+            }
+            android.util.Log.d("XauPilotNetwork", sanitized)
+        }.apply {
+            level = HttpLoggingInterceptor.Level.HEADERS
         }
-        OkHttpClient.Builder()
+
+        return OkHttpClient.Builder()
             .addInterceptor { chain ->
                 val original = chain.request()
                 val requestBuilder = original.newBuilder()
@@ -38,15 +60,20 @@ object ApiClient {
             .addInterceptor(logging)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
             .build()
     }
 
-    val apiService: ApiService by lazy {
-        Retrofit.Builder()
-            .baseUrl(baseUrl)
-            .client(okHttpClient)
-            .addConverterFactory(MoshiConverterFactory.create())
-            .build()
-            .create(ApiService::class.java)
-    }
+    val apiService: ApiService
+        get() {
+            if (cachedApiService == null) {
+                cachedApiService = Retrofit.Builder()
+                    .baseUrl(baseUrl)
+                    .client(buildOkHttpClient())
+                    .addConverterFactory(MoshiConverterFactory.create())
+                    .build()
+                    .create(ApiService::class.java)
+            }
+            return cachedApiService!!
+        }
 }

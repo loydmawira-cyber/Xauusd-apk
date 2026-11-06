@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: xau_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: xau_user
+      POSTGRES_PASSWORD: xau_secure_pass_2026
+      POSTGRES_DB: xau_pilot_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./alembic/versions/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xau_user -d xau_pilot_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xau_backend
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://xau_user:xau_secure_pass_2026@db:5432/xau_pilot_db
+      JWT_SECRET: xau_prod_jwt_super_secret_key_change_in_production_998124
+    ports:
+      - "8000:8000"
+
+volumes:
+  postgres_data:

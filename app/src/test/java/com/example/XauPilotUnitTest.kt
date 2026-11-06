@@ -72,7 +72,7 @@ class XauPilotUnitTest {
             environment = AccountEnvironment.DEMO,
             initialBalance = 50000.0
         )
-        assertEquals("Scalp VIP Demo", newAccount.label)
+        assertTrue(newAccount.label.contains("Scalp VIP Demo"))
 
         val ea = repository.eaProducts.value.first()
         val inst = repository.assignEaToAccount(ea, newAccount, 778899, "M15")

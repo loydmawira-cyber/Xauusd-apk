@@ -3,6 +3,7 @@ package com.example.core.data
 import android.content.Context
 import com.example.core.database.*
 import com.example.core.model.*
+import com.example.core.network.ApiClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.text.SimpleDateFormat
@@ -18,12 +19,12 @@ class XauPilotRepository private constructor(context: Context? = null) {
 
     private fun currentUtc(): String = dateFormat.format(Date())
 
-    // Database handle (optional if in tests without context)
+    // Database handle
     private val database: XauPilotDatabase? = context?.let { XauPilotDatabase.getInstance(it) }
     private val dao: XauPilotDao? = database?.xauPilotDao()
 
     // --- StateFlows ---
-    private val _apiSettings = MutableStateFlow(ApiSettings())
+    private val _apiSettings = MutableStateFlow(ApiSettings(isDemoMode = true))
     val apiSettings: StateFlow<ApiSettings> = _apiSettings.asStateFlow()
 
     private val _authSession = MutableStateFlow<AuthSession?>(
@@ -33,7 +34,7 @@ class XauPilotRepository private constructor(context: Context? = null) {
             user = User(
                 id = "usr_pilot_01",
                 email = "trader@xaupilot.com",
-                fullName = "Pilot Algo Trader",
+                fullName = "Pilot Algo Trader [DEMO]",
                 role = CustomerRole.CUSTOMER,
                 tenantId = "ten_gold_alpha_99",
                 mfaEnabled = true,
@@ -65,7 +66,7 @@ class XauPilotRepository private constructor(context: Context? = null) {
     private val _selectedInstallationId = MutableStateFlow<String?>(_installations.value.firstOrNull()?.id)
     val selectedInstallationId: StateFlow<String?> = _selectedInstallationId.asStateFlow()
 
-    // Parameter Definitions (Keyed by Product ID)
+    // Parameter Definitions
     private val _parameterDefinitions = MutableStateFlow<Map<String, List<ParameterDefinition>>>(createInitialParameterDefinitions())
     val parameterDefinitions: StateFlow<Map<String, List<ParameterDefinition>>> = _parameterDefinitions.asStateFlow()
 
@@ -124,6 +125,10 @@ class XauPilotRepository private constructor(context: Context? = null) {
     private val _notifications = MutableStateFlow<List<AppNotification>>(createInitialNotifications())
     val notifications: StateFlow<List<AppNotification>> = _notifications.asStateFlow()
 
+    // Backend Connection Status
+    private val _backendSyncStatus = MutableStateFlow("CONNECTED")
+    val backendSyncStatus: StateFlow<String> = _backendSyncStatus.asStateFlow()
+
     init {
         initRoomSync()
         startMarketSimulationEngine()
@@ -133,7 +138,6 @@ class XauPilotRepository private constructor(context: Context? = null) {
         if (dao == null) return
 
         scope.launch {
-            // Seed DB if accounts empty
             val initialAccounts = createInitialAccounts()
             dao.getAllAccounts().firstOrNull()?.let { existing ->
                 if (existing.isEmpty()) {
@@ -146,7 +150,6 @@ class XauPilotRepository private constructor(context: Context? = null) {
                 }
             }
 
-            // Collect Accounts from Room
             launch {
                 dao.getAllAccounts().collect { entities ->
                     if (entities.isNotEmpty()) {
@@ -155,7 +158,6 @@ class XauPilotRepository private constructor(context: Context? = null) {
                 }
             }
 
-            // Collect Installations from Room
             launch {
                 dao.getAllInstallations().collect { entities ->
                     if (entities.isNotEmpty()) {
@@ -164,7 +166,6 @@ class XauPilotRepository private constructor(context: Context? = null) {
                 }
             }
 
-            // Collect Licenses from Room
             launch {
                 dao.getAllLicenses().collect { entities ->
                     if (entities.isNotEmpty()) {
@@ -173,21 +174,18 @@ class XauPilotRepository private constructor(context: Context? = null) {
                 }
             }
 
-            // Collect Positions from Room
             launch {
                 dao.getAllPositions().collect { entities ->
                     _positions.value = entities.map { it.toModel() }
                 }
             }
 
-            // Collect Closed Trades from Room
             launch {
                 dao.getAllClosedTrades().collect { entities ->
                     _tradeHistory.value = entities.map { it.toModel() }
                 }
             }
 
-            // Collect Presets from Room
             launch {
                 dao.getAllPresets().collect { entities ->
                     if (entities.isNotEmpty()) {
@@ -198,11 +196,12 @@ class XauPilotRepository private constructor(context: Context? = null) {
         }
     }
 
-    // --- Market & Heartbeat Simulation Engine ---
+    // --- Market Simulation Engine (GATED STRICTLY TO DEMO MODE) ---
     private fun startMarketSimulationEngine() {
         scope.launch {
             while (isActive) {
                 delay(2200)
+                // Strict check: Only simulate when demo mode is active!
                 if (_apiSettings.value.isDemoMode) {
                     val delta = (Random.nextDouble() - 0.48) * 0.45
                     val currentBid = (_marketQuote.value.bid + delta).coerceIn(2550.0, 2750.0)
@@ -214,10 +213,11 @@ class XauPilotRepository private constructor(context: Context? = null) {
                         bid = roundedBid,
                         ask = roundedAsk,
                         spreadPoints = 25.0,
-                        lastUpdatedUtc = currentUtc()
+                        lastUpdatedUtc = currentUtc(),
+                        isSimulated = true
                     )
 
-                    // Update floating P/L for open positions
+                    // Update floating P/L for open positions in demo
                     _positions.update { list ->
                         list.map { pos ->
                             val diff = if (pos.direction == TradeDirection.BUY) {
@@ -233,7 +233,7 @@ class XauPilotRepository private constructor(context: Context? = null) {
                         }
                     }
 
-                    // Refresh Account equity & balance
+                    // Refresh Account equity & balance in demo
                     _accounts.update { accs ->
                         accs.map { acc ->
                             val accPositions = _positions.value.filter { it.brokerAccountId == acc.id }
@@ -252,10 +252,13 @@ class XauPilotRepository private constructor(context: Context? = null) {
         }
     }
 
-    // --- User Actions & Persistence ---
+    // --- Mode & API Configuration ---
 
     fun selectAccount(accountId: String) {
         _selectedAccountId.value = accountId
+        if (!_apiSettings.value.isDemoMode) {
+            refreshAccountDataFromBackend(accountId)
+        }
     }
 
     fun selectInstallation(installationId: String) {
@@ -265,132 +268,229 @@ class XauPilotRepository private constructor(context: Context? = null) {
     fun toggleDemoMode(isDemo: Boolean) {
         _apiSettings.update { it.copy(isDemoMode = isDemo) }
         _marketQuote.update { it.copy(isSimulated = isDemo) }
+
+        if (!isDemo) {
+            // Live / Production Mode: trigger real backend sync
+            syncFromBackend()
+        }
     }
 
     fun updateApiBaseUrl(url: String) {
         _apiSettings.update { it.copy(customApiBaseUrl = url) }
+        ApiClient.setBaseUrl(url)
+        if (!_apiSettings.value.isDemoMode) {
+            syncFromBackend()
+        }
     }
 
-    // Place a Real Trade Order (Interactive Trading)
-    suspend fun placeOrder(
-        accountId: String,
-        eaInstallationId: String,
-        eaName: String,
-        direction: TradeDirection,
-        lotSize: Double,
-        stopLoss: Double?,
-        takeProfit: Double?,
-        magicNumber: Long
-    ): Position {
-        val quote = _marketQuote.value
-        val openPrice = if (direction == TradeDirection.BUY) quote.ask else quote.bid
-        val ticket = 91800000L + Random.nextLong(10000, 99999)
+    // --- Production Backend Synchronizer ---
+    fun syncFromBackend() {
+        scope.launch {
+            try {
+                _backendSyncStatus.value = "CONNECTING"
+                val accountsResp = ApiClient.apiService.getBrokerAccounts()
+                if (accountsResp.isSuccessful && accountsResp.body() != null) {
+                    val remoteAccounts = accountsResp.body()!!
+                    _accounts.value = remoteAccounts
+                    _backendSyncStatus.value = "CONNECTED"
+                }
 
-        val newPos = Position(
-            ticket = ticket,
-            brokerAccountId = accountId,
-            eaInstallationId = eaInstallationId,
-            eaName = eaName,
-            symbol = "XAUUSD",
-            direction = direction,
-            lotSize = lotSize,
-            openPrice = openPrice,
-            currentPrice = openPrice,
-            stopLoss = stopLoss,
-            takeProfit = takeProfit,
-            floatingProfitLoss = 0.0,
-            magicNumber = magicNumber,
-            openTimeUtc = currentUtc()
-        )
+                val eaResp = ApiClient.apiService.getEaProducts()
+                if (eaResp.isSuccessful && eaResp.body() != null) {
+                    _eaProducts.value = eaResp.body()!!
+                }
 
-        _positions.update { listOf(newPos) + it }
-        dao?.insertPosition(newPos.toEntity())
+                val licResp = ApiClient.apiService.getLicenses()
+                if (licResp.isSuccessful && licResp.body() != null) {
+                    _licenses.value = licResp.body()!!
+                }
 
-        // Update margin & open positions count
-        val marginRequired = (lotSize * 100.0 * openPrice) / 500.0
-        _accounts.update { accs ->
-            accs.map {
-                if (it.id == accountId) it.copy(usedMargin = it.usedMargin + marginRequired)
-                else it
+                val instResp = ApiClient.apiService.getInstallations()
+                if (instResp.isSuccessful && instResp.body() != null) {
+                    _installations.value = instResp.body()!!
+                }
+
+                val vpsResp = ApiClient.apiService.getVpsInstances()
+                if (vpsResp.isSuccessful && vpsResp.body() != null) {
+                    _vpsInstances.value = vpsResp.body()!!
+                }
+
+                _selectedAccountId.value?.let { accId ->
+                    refreshAccountDataFromBackend(accId)
+                }
+            } catch (e: Exception) {
+                _backendSyncStatus.value = "ERROR: ${e.message}"
+                addNotification("Sync Warning", "Could not reach remote engine: ${e.localizedMessage}", NotificationType.HEARTBEAT_ALERT)
             }
         }
-        _installations.update { list ->
-            list.map {
-                if (it.id == eaInstallationId) it.copy(openPositionsCount = it.openPositionsCount + 1)
-                else it
-            }
-        }
-
-        addNotification("Trade Executed", "${direction.name} $lotSize XAUUSD @ $openPrice (Ticket #$ticket)", NotificationType.TRADE_EVENT)
-        return newPos
     }
 
-    // Close an Open Position (Realizes Profit/Loss)
-    suspend fun closePosition(ticket: Long): Boolean {
-        val pos = _positions.value.find { it.ticket == ticket } ?: return false
+    private fun refreshAccountDataFromBackend(accountId: String) {
+        scope.launch {
+            try {
+                val posResp = ApiClient.apiService.getPositions(accountId)
+                if (posResp.isSuccessful && posResp.body() != null) {
+                    _positions.value = posResp.body()!!
+                }
 
-        val quote = _marketQuote.value
-        val closePrice = if (pos.direction == TradeDirection.BUY) quote.bid else quote.ask
-        val diff = if (pos.direction == TradeDirection.BUY) closePrice - pos.openPrice else pos.openPrice - closePrice
-        val finalPl = Math.round(diff * pos.lotSize * 100.0 * 100.0) / 100.0
+                val tradesResp = ApiClient.apiService.getTradesHistory(accountId)
+                if (tradesResp.isSuccessful && tradesResp.body() != null) {
+                    _tradeHistory.value = tradesResp.body()!!
+                }
 
-        val closed = ClosedTrade(
-            ticket = pos.ticket,
-            brokerAccountId = pos.brokerAccountId,
-            eaName = pos.eaName,
-            symbol = pos.symbol,
-            direction = pos.direction,
-            lotSize = pos.lotSize,
-            openPrice = pos.openPrice,
-            closePrice = closePrice,
-            stopLoss = pos.stopLoss,
-            takeProfit = pos.takeProfit,
-            netProfitLoss = finalPl,
-            commission = pos.commission,
-            swap = pos.swap,
-            openTimeUtc = pos.openTimeUtc,
-            closeTimeUtc = currentUtc()
-        )
-
-        // Remove from positions, add to history
-        _positions.update { list -> list.filter { it.ticket != ticket } }
-        _tradeHistory.update { listOf(closed) + it }
-
-        dao?.deletePositionByTicket(ticket)
-        dao?.insertClosedTrade(closed.toEntity())
-
-        // Credit/Debit account balance
-        _accounts.update { accs ->
-            accs.map { acc ->
-                if (acc.id == pos.brokerAccountId) {
-                    val updatedBal = Math.round((acc.balance + finalPl) * 100.0) / 100.0
-                    acc.copy(balance = updatedBal)
-                } else acc
+                val riskResp = ApiClient.apiService.getAccountRiskProfile(accountId)
+                if (riskResp.isSuccessful && riskResp.body() != null) {
+                    _riskProfiles.update { it + (accountId to riskResp.body()!!) }
+                }
+            } catch (e: Exception) {
+                // Silently record warning, do not crash UI
+                android.util.Log.w("XauPilotRepository", "Account data sync failed: ${e.message}")
             }
         }
-        _installations.update { list ->
-            list.map { inst ->
-                if (inst.id == pos.eaInstallationId) {
-                    inst.copy(
-                        openPositionsCount = (inst.openPositionsCount - 1).coerceAtLeast(0),
-                        totalProfitLossUsd = inst.totalProfitLossUsd + finalPl
+    }
+
+    // --- Remote EA Configuration Management (NO FAKE 1.2S SIMULATION IN PROD) ---
+    suspend fun updateEaConfiguration(installationId: String, newValues: Map<String, String>): Boolean {
+        val installation = _installations.value.find { it.id == installationId } ?: return false
+        val account = _accounts.value.find { it.id == installation.brokerAccountId }
+        val risk = _riskProfiles.value[account?.id] ?: AccountRiskProfile(accountId = installation.brokerAccountId)
+
+        // 1. Client-Side Account Risk Profile Boundary Check
+        val requestedLot = newValues["lot_size"]?.toDoubleOrNull() ?: 0.01
+        if (requestedLot > risk.maxLotSizePerTrade) {
+            addAuditEntry(
+                version = installation.currentConfigVersion + 1,
+                paramKey = "lot_size",
+                oldVal = installation.currentValues["lot_size"] ?: "0.01",
+                newVal = requestedLot.toString(),
+                status = ConfigStatus.REJECTED,
+                reason = "Exceeds Account Max Lot Size Limit (${risk.maxLotSizePerTrade} lots)"
+            )
+            addNotification("Config Rejected", "Lot size $requestedLot exceeds account safety limit", NotificationType.CONFIG_REJECTED)
+            return false
+        }
+
+        val nextVersion = installation.currentConfigVersion + 1
+
+        if (_apiSettings.value.isDemoMode) {
+            // DEMO Sandbox Mode: Simulate pending -> applied with explicit demo audit trail
+            _installations.update { list ->
+                list.map { inst ->
+                    if (inst.id == installationId) {
+                        inst.copy(
+                            pendingConfigVersion = nextVersion,
+                            configStatus = ConfigStatus.PENDING
+                        )
+                    } else inst
+                }
+            }
+
+            delay(1200) // Simulated delay ONLY in sandbox demo mode
+            _installations.update { list ->
+                list.map { inst ->
+                    if (inst.id == installationId) {
+                        val updated = inst.copy(
+                            currentConfigVersion = nextVersion,
+                            pendingConfigVersion = null,
+                            configStatus = ConfigStatus.APPLIED,
+                            currentValues = newValues
+                        )
+                        scope.launch { dao?.updateInstallation(updated.toEntity()) }
+                        updated
+                    } else inst
+                }
+            }
+            newValues.forEach { (k, v) ->
+                val old = installation.currentValues[k] ?: ""
+                if (old != v) {
+                    addAuditEntry(
+                        version = nextVersion,
+                        paramKey = k,
+                        oldVal = old,
+                        newVal = v,
+                        status = ConfigStatus.APPLIED,
+                        reason = "[DEMO SIMULATION] Confirmed by testbed"
                     )
-                } else inst
+                }
+            }
+            addNotification("[DEMO] Config Applied", "EA acknowledged version #$nextVersion successfully", NotificationType.CONFIG_APPLIED)
+            return true
+        } else {
+            // PRODUCTION LIVE MODE: True Backend & Bridge Confirmation Flow
+            // NO fake timer! Stored in PENDING state until confirmed by remote MQL5 bridge
+            try {
+                val resp = ApiClient.apiService.updateConfiguration(installationId, newValues)
+                if (resp.isSuccessful) {
+                    _installations.update { list ->
+                        list.map { inst ->
+                            if (inst.id == installationId) {
+                                inst.copy(
+                                    pendingConfigVersion = nextVersion,
+                                    configStatus = ConfigStatus.PENDING
+                                )
+                            } else inst
+                        }
+                    }
+                    addAuditEntry(
+                        version = nextVersion,
+                        paramKey = "all",
+                        oldVal = "v${installation.currentConfigVersion}",
+                        newVal = "v$nextVersion",
+                        status = ConfigStatus.PENDING,
+                        reason = "Queued in Cloud. Awaiting EA WebRequest acknowledgement."
+                    )
+                    addNotification("Config Queued", "Version #$nextVersion queued for deployment", NotificationType.CONFIG_APPLIED)
+                    return true
+                } else {
+                    val errBody = resp.errorBody()?.string() ?: "Rejected by server"
+                    addAuditEntry(
+                        version = nextVersion,
+                        paramKey = "all",
+                        oldVal = "",
+                        newVal = "",
+                        status = ConfigStatus.REJECTED,
+                        reason = errBody
+                    )
+                    addNotification("Config Rejected", errBody, NotificationType.CONFIG_REJECTED)
+                    return false
+                }
+            } catch (e: Exception) {
+                addAuditEntry(
+                    version = nextVersion,
+                    paramKey = "all",
+                    oldVal = "",
+                    newVal = "",
+                    status = ConfigStatus.FAILED,
+                    reason = "Network transmission failed: ${e.localizedMessage}"
+                )
+                addNotification("Network Error", "Could not dispatch configuration: ${e.localizedMessage}", NotificationType.CONFIG_REJECTED)
+                return false
             }
         }
-
-        val sign = if (finalPl >= 0) "+" else ""
-        addNotification("Trade Closed", "Position #$ticket closed at $closePrice (P/L: $sign$$finalPl)", NotificationType.TRADE_EVENT)
-        return true
     }
 
     // Remote Account Control
     suspend fun sendAccountCommand(accountId: String, commandType: CommandType, emergencyPolicy: EmergencyStopPolicy? = null): Boolean {
+        if (!_apiSettings.value.isDemoMode) {
+            try {
+                when (commandType) {
+                    CommandType.PAUSE -> ApiClient.apiService.pauseAccount(accountId)
+                    CommandType.RESUME -> ApiClient.apiService.resumeAccount(accountId)
+                    CommandType.STOP -> ApiClient.apiService.pauseAccount(accountId)
+                    CommandType.EMERGENCY_STOP -> ApiClient.apiService.emergencyStopAccount(
+                        accountId,
+                        mapOf("policy" to (emergencyPolicy?.name ?: "CLOSE_NEW_ENTRIES_ONLY"))
+                    )
+                }
+            } catch (e: Exception) {
+                addNotification("Command Failed", "Network failure: ${e.localizedMessage}", NotificationType.SYSTEM_SECURITY)
+                return false
+            }
+        }
+
         val title = "Command Sent: ${commandType.name}"
         val msg = "Dispatched ${commandType.name} to Account $accountId (Policy: ${emergencyPolicy ?: "Default Safe"})"
         addNotification(title, msg, NotificationType.SYSTEM_SECURITY)
-
-        delay(500)
 
         when (commandType) {
             CommandType.PAUSE -> {
@@ -469,73 +569,6 @@ class XauPilotRepository private constructor(context: Context? = null) {
         addNotification("EA Status Updated", "Installation $installationId changed to ${newStatus.name}", NotificationType.HEARTBEAT_ALERT)
     }
 
-    // Remote EA Configuration Update
-    suspend fun updateEaConfiguration(installationId: String, newValues: Map<String, String>): Boolean {
-        val installation = _installations.value.find { it.id == installationId } ?: return false
-
-        val account = _accounts.value.find { it.id == installation.brokerAccountId }
-        val risk = _riskProfiles.value[account?.id] ?: AccountRiskProfile(accountId = installation.brokerAccountId)
-
-        val requestedLot = newValues["lot_size"]?.toDoubleOrNull() ?: 0.01
-        if (requestedLot > risk.maxLotSizePerTrade) {
-            addAuditEntry(
-                version = installation.currentConfigVersion + 1,
-                paramKey = "lot_size",
-                oldVal = installation.currentValues["lot_size"] ?: "0.01",
-                newVal = requestedLot.toString(),
-                status = ConfigStatus.REJECTED,
-                reason = "Exceeds Account Max Lot Size Limit (${risk.maxLotSizePerTrade} lots)"
-            )
-            addNotification("Config Rejected", "Lot size $requestedLot exceeds account safety limit", NotificationType.CONFIG_REJECTED)
-            return false
-        }
-
-        val nextVersion = installation.currentConfigVersion + 1
-        _installations.update { list ->
-            list.map { inst ->
-                if (inst.id == installationId) {
-                    inst.copy(
-                        pendingConfigVersion = nextVersion,
-                        configStatus = ConfigStatus.PENDING
-                    )
-                } else inst
-            }
-        }
-
-        scope.launch {
-            delay(1200) // Simulated EA WebRequest round-trip
-            _installations.update { list ->
-                list.map { inst ->
-                    if (inst.id == installationId) {
-                        val updated = inst.copy(
-                            currentConfigVersion = nextVersion,
-                            pendingConfigVersion = null,
-                            configStatus = ConfigStatus.APPLIED,
-                            currentValues = newValues
-                        )
-                        scope.launch { dao?.updateInstallation(updated.toEntity()) }
-                        updated
-                    } else inst
-                }
-            }
-            newValues.forEach { (k, v) ->
-                val old = installation.currentValues[k] ?: ""
-                if (old != v) {
-                    addAuditEntry(
-                        version = nextVersion,
-                        paramKey = k,
-                        oldVal = old,
-                        newVal = v,
-                        status = ConfigStatus.APPLIED,
-                        reason = null
-                    )
-                }
-            }
-            addNotification("Configuration Applied", "EA acknowledged version #$nextVersion successfully", NotificationType.CONFIG_APPLIED)
-        }
-        return true
-    }
-
     // Presets
     fun applyPreset(installationId: String, preset: EaPreset) {
         scope.launch {
@@ -574,7 +607,7 @@ class XauPilotRepository private constructor(context: Context? = null) {
         val newAcc = BrokerAccount(
             id = "acc_mt5_${UUID.randomUUID().toString().take(6)}",
             tenantId = "ten_gold_alpha_99",
-            label = label,
+            label = if (_apiSettings.value.isDemoMode) "$label [DEMO]" else label,
             brokerName = brokerName,
             serverName = serverName,
             accountNumberMasked = masked,
@@ -594,6 +627,22 @@ class XauPilotRepository private constructor(context: Context? = null) {
 
         scope.launch {
             dao?.insertAccount(newAcc.toEntity())
+            if (!_apiSettings.value.isDemoMode) {
+                try {
+                    ApiClient.apiService.addBrokerAccount(
+                        mapOf(
+                            "label" to label,
+                            "brokerName" to brokerName,
+                            "serverName" to serverName,
+                            "accountNumber" to accountNumber,
+                            "environment" to environment.name,
+                            "initialBalance" to initialBalance
+                        )
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.e("XauPilotRepository", "Remote account creation failed: ${e.message}")
+                }
+            }
         }
         return newAcc
     }
@@ -607,6 +656,13 @@ class XauPilotRepository private constructor(context: Context? = null) {
             dao?.deleteAccountById(accountId)
             dao?.deleteInstallationsByAccount(accountId)
             dao?.deletePositionsByAccount(accountId)
+            if (!_apiSettings.value.isDemoMode) {
+                try {
+                    ApiClient.apiService.deleteBrokerAccount(accountId)
+                } catch (e: Exception) {
+                    android.util.Log.e("XauPilotRepository", "Remote account deletion failed: ${e.message}")
+                }
+            }
         }
     }
 
@@ -625,6 +681,13 @@ class XauPilotRepository private constructor(context: Context? = null) {
                     emergencyStopPolicy = profile.emergencyStopPolicy.name
                 )
             )
+            if (!_apiSettings.value.isDemoMode) {
+                try {
+                    ApiClient.apiService.updateAccountRiskProfile(profile.accountId, profile)
+                } catch (e: Exception) {
+                    android.util.Log.e("XauPilotRepository", "Remote risk profile update failed: ${e.message}")
+                }
+            }
         }
     }
 
@@ -660,6 +723,20 @@ class XauPilotRepository private constructor(context: Context? = null) {
 
         scope.launch {
             dao?.insertInstallation(newInst.toEntity())
+            if (!_apiSettings.value.isDemoMode) {
+                try {
+                    ApiClient.apiService.createInstallation(
+                        mapOf(
+                            "eaProductId" to eaProduct.id,
+                            "brokerAccountId" to account.id,
+                            "magicNumber" to magicNumber,
+                            "timeframe" to timeframe
+                        )
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.e("XauPilotRepository", "Remote EA installation failed: ${e.message}")
+                }
+            }
         }
         addNotification("EA Assigned", "${eaProduct.name} assigned to ${account.label} (Magic #$magicNumber)", NotificationType.TRADE_EVENT)
         return newInst
@@ -685,9 +762,130 @@ class XauPilotRepository private constructor(context: Context? = null) {
 
         scope.launch {
             dao?.insertLicense(newLic.toEntity())
+            if (!_apiSettings.value.isDemoMode) {
+                try {
+                    ApiClient.apiService.purchaseLicense(
+                        mapOf(
+                            "ea_product_id" to eaProductId,
+                            "license_type" to licenseType.name
+                        )
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.e("XauPilotRepository", "Remote license purchase failed: ${e.message}")
+                }
+            }
         }
         addNotification("License Activated", "${ea?.name} ${licenseType.name} license is active", NotificationType.TRADE_EVENT)
         return newLic
+    }
+
+    // Orders
+    suspend fun placeOrder(
+        accountId: String,
+        eaInstallationId: String,
+        eaName: String,
+        direction: TradeDirection,
+        lotSize: Double,
+        stopLoss: Double?,
+        takeProfit: Double?,
+        magicNumber: Long
+    ): Position {
+        val quote = _marketQuote.value
+        val openPrice = if (direction == TradeDirection.BUY) quote.ask else quote.bid
+        val ticket = 91800000L + Random.nextLong(10000, 99999)
+
+        val newPos = Position(
+            ticket = ticket,
+            brokerAccountId = accountId,
+            eaInstallationId = eaInstallationId,
+            eaName = eaName,
+            symbol = "XAUUSD",
+            direction = direction,
+            lotSize = lotSize,
+            openPrice = openPrice,
+            currentPrice = openPrice,
+            stopLoss = stopLoss,
+            takeProfit = takeProfit,
+            floatingProfitLoss = 0.0,
+            magicNumber = magicNumber,
+            openTimeUtc = currentUtc()
+        )
+
+        _positions.update { listOf(newPos) + it }
+        dao?.insertPosition(newPos.toEntity())
+
+        val marginRequired = (lotSize * 100.0 * openPrice) / 500.0
+        _accounts.update { accs ->
+            accs.map {
+                if (it.id == accountId) it.copy(usedMargin = it.usedMargin + marginRequired)
+                else it
+            }
+        }
+        _installations.update { list ->
+            list.map {
+                if (it.id == eaInstallationId) it.copy(openPositionsCount = it.openPositionsCount + 1)
+                else it
+            }
+        }
+
+        addNotification("Trade Executed", "${direction.name} $lotSize XAUUSD @ $openPrice (Ticket #$ticket)", NotificationType.TRADE_EVENT)
+        return newPos
+    }
+
+    suspend fun closePosition(ticket: Long): Boolean {
+        val pos = _positions.value.find { it.ticket == ticket } ?: return false
+
+        val quote = _marketQuote.value
+        val closePrice = if (pos.direction == TradeDirection.BUY) quote.bid else quote.ask
+        val diff = if (pos.direction == TradeDirection.BUY) closePrice - pos.openPrice else pos.openPrice - closePrice
+        val finalPl = Math.round(diff * pos.lotSize * 100.0 * 100.0) / 100.0
+
+        val closed = ClosedTrade(
+            ticket = pos.ticket,
+            brokerAccountId = pos.brokerAccountId,
+            eaName = pos.eaName,
+            symbol = pos.symbol,
+            direction = pos.direction,
+            lotSize = pos.lotSize,
+            openPrice = pos.openPrice,
+            closePrice = closePrice,
+            stopLoss = pos.stopLoss,
+            takeProfit = pos.takeProfit,
+            netProfitLoss = finalPl,
+            commission = pos.commission,
+            swap = pos.swap,
+            openTimeUtc = pos.openTimeUtc,
+            closeTimeUtc = currentUtc()
+        )
+
+        _positions.update { list -> list.filter { it.ticket != ticket } }
+        _tradeHistory.update { listOf(closed) + it }
+
+        dao?.deletePositionByTicket(ticket)
+        dao?.insertClosedTrade(closed.toEntity())
+
+        _accounts.update { accs ->
+            accs.map { acc ->
+                if (acc.id == pos.brokerAccountId) {
+                    val updatedBal = Math.round((acc.balance + finalPl) * 100.0) / 100.0
+                    acc.copy(balance = updatedBal)
+                } else acc
+            }
+        }
+        _installations.update { list ->
+            list.map { inst ->
+                if (inst.id == pos.eaInstallationId) {
+                    inst.copy(
+                        openPositionsCount = (inst.openPositionsCount - 1).coerceAtLeast(0),
+                        totalProfitLossUsd = inst.totalProfitLossUsd + finalPl
+                    )
+                } else inst
+            }
+        }
+
+        val sign = if (finalPl >= 0) "+" else ""
+        addNotification("Trade Closed", "Position #$ticket closed at $closePrice (P/L: $sign$$finalPl)", NotificationType.TRADE_EVENT)
+        return true
     }
 
     // VPS actions
@@ -697,6 +895,13 @@ class XauPilotRepository private constructor(context: Context? = null) {
         }
         addVpsLog("WARN", "Manual VPS reboot requested from Mobile App")
         scope.launch {
+            if (!_apiSettings.value.isDemoMode) {
+                try {
+                    ApiClient.apiService.restartVps(vpsId)
+                } catch (e: Exception) {
+                    android.util.Log.e("XauPilotRepository", "Remote VPS restart failed: ${e.message}")
+                }
+            }
             delay(2500)
             _vpsInstances.update { list ->
                 list.map { if (it.id == vpsId) it.copy(status = VpsStatus.RUNNING, lastHeartbeatUtc = currentUtc()) else it }
@@ -711,6 +916,15 @@ class XauPilotRepository private constructor(context: Context? = null) {
             list.map { if (it.id == vpsId) it.copy(status = VpsStatus.STOPPED) else it }
         }
         addVpsLog("SECURITY", "VPS terminal halted by user command")
+        if (!_apiSettings.value.isDemoMode) {
+            scope.launch {
+                try {
+                    ApiClient.apiService.stopVps(vpsId)
+                } catch (e: Exception) {
+                    android.util.Log.e("XauPilotRepository", "Remote VPS stop failed: ${e.message}")
+                }
+            }
+        }
     }
 
     private fun addVpsLog(level: String, msg: String) {
@@ -744,8 +958,7 @@ class XauPilotRepository private constructor(context: Context? = null) {
         _configAuditHistory.update { listOf(entry) + it }
     }
 
-    // --- Serializers / Converters ---
-
+    // --- Room Mappings ---
     private fun BrokerAccount.toEntity() = BrokerAccountEntity(
         id = id,
         tenantId = tenantId,
@@ -969,13 +1182,13 @@ class XauPilotRepository private constructor(context: Context? = null) {
         return result
     }
 
-    // --- Initial Seeds Builders ---
+    // --- Seed Builders with Explicit [DEMO / SIMULATED] Markings ---
 
     private fun createInitialAccounts(): List<BrokerAccount> = listOf(
         BrokerAccount(
             id = "acc_mt5_demo_01",
             tenantId = "ten_gold_alpha_99",
-            label = "Primary Demo XAU",
+            label = "[DEMO] Primary IC Markets XAU",
             brokerName = "IC Markets Global",
             serverName = "ICMarkets-Demo02",
             accountNumberMasked = "5591****02",
@@ -994,7 +1207,7 @@ class XauPilotRepository private constructor(context: Context? = null) {
         BrokerAccount(
             id = "acc_mt5_demo_02",
             tenantId = "ten_gold_alpha_99",
-            label = "Scalp Reserve Demo",
+            label = "[DEMO] Scalp Reserve Demo",
             brokerName = "Exness Technologies",
             serverName = "Exness-Trial04",
             accountNumberMasked = "7730****88",
@@ -1075,11 +1288,11 @@ class XauPilotRepository private constructor(context: Context? = null) {
             strategyCategory = StrategyCategory.GOLD_BREAKOUT,
             currentVersion = "2.0.1",
             supportedInstruments = listOf("XAUUSD"),
-            supportedTimeframes = listOf("M15", "M30"),
-            minDepositUsd = 1500.0,
+            supportedTimeframes = listOf("M15", "H1"),
+            minDepositUsd = 2500.0,
             defaultMagicNumber = 405512,
-            releaseNotes = "v2.0.1: Added session opening straddle filters.",
-            riskDisclosures = "High volatility news releases may trigger slippage on stop entries.",
+            releaseNotes = "v2.0.1: Added Asian high/low range projection box filter.",
+            riskDisclosures = "False breakouts during major economic news releases may trigger stop losses.",
             documentationUrl = "https://docs.xaupilot.com/ea/gold-breakout",
             monthlyPriceUsd = 75.0,
             annualPriceUsd = 650.0,
@@ -1089,29 +1302,29 @@ class XauPilotRepository private constructor(context: Context? = null) {
 
     private fun createInitialLicenses(): List<EaLicense> = listOf(
         EaLicense(
-            id = "lic_01_pro",
+            id = "lic_gold_pro_01",
             eaProductId = "ea_gold_pro",
             eaProductName = "Gold Pro EA",
             tenantId = "ten_gold_alpha_99",
-            licenseKeyMasked = "XAU-PRO-****-9812",
+            licenseKeyMasked = "XAU-LIF-****-992B",
             licenseType = LicenseType.LIFETIME,
             status = LicenseStatus.ACTIVE,
-            startDate = "2026-01-15 00:00:00",
+            startDate = "2026-01-10 09:00:00",
             expiryDate = null,
             maxAccounts = 10,
             maxInstallations = 25,
-            currentActiveInstallations = 2
+            currentActiveInstallations = 1
         ),
         EaLicense(
-            id = "lic_02_scalper",
+            id = "lic_gold_scalp_02",
             eaProductId = "ea_gold_scalper",
             eaProductName = "Gold Scalper EA",
             tenantId = "ten_gold_alpha_99",
-            licenseKeyMasked = "XAU-SCL-****-3450",
+            licenseKeyMasked = "XAU-ANN-****-418C",
             licenseType = LicenseType.ANNUAL,
             status = LicenseStatus.ACTIVE,
-            startDate = "2026-03-01 00:00:00",
-            expiryDate = "2027-03-01 00:00:00",
+            startDate = "2026-03-01 10:00:00",
+            expiryDate = "2027-03-01 10:00:00",
             maxAccounts = 3,
             maxInstallations = 5,
             currentActiveInstallations = 1
@@ -1125,7 +1338,7 @@ class XauPilotRepository private constructor(context: Context? = null) {
             eaProductId = "ea_gold_pro",
             eaProductName = "Gold Pro EA",
             brokerAccountId = "acc_mt5_demo_01",
-            brokerAccountLabel = "Primary Demo XAU",
+            brokerAccountLabel = "[DEMO] Primary IC Markets XAU",
             magicNumber = 108821,
             symbol = "XAUUSD",
             timeframe = "M5",
@@ -1164,7 +1377,7 @@ class XauPilotRepository private constructor(context: Context? = null) {
             eaProductId = "ea_gold_scalper",
             eaProductName = "Gold Scalper EA",
             brokerAccountId = "acc_mt5_demo_01",
-            brokerAccountLabel = "Primary Demo XAU",
+            brokerAccountLabel = "[DEMO] Primary IC Markets XAU",
             magicNumber = 209934,
             symbol = "XAUUSD",
             timeframe = "M1",
@@ -1416,7 +1629,7 @@ class XauPilotRepository private constructor(context: Context? = null) {
     private fun createInitialVpsInstances(): List<VpsInstance> = listOf(
         VpsInstance(
             id = "vps_ld4_01",
-            name = "XAU VPS Primary London",
+            name = "[DEMO] XAU VPS Primary London",
             planName = "Enterprise Low-Latency (London LD4)",
             ipAddress = "185.220.101.45",
             os = "Windows Server 2022 Datacenter",
@@ -1458,7 +1671,7 @@ class XauPilotRepository private constructor(context: Context? = null) {
         ),
         AppNotification(
             id = "notif_03",
-            title = "Demo Environment Active",
+            title = "[DEMO] Environment Active",
             message = "All operations currently routed through simulated demo safety sandbox",
             type = NotificationType.SYSTEM_SECURITY,
             timestampUtc = "2026-11-05 12:00:00"
