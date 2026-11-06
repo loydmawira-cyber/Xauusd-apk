@@ -7,7 +7,7 @@ services:
     restart: always
     environment:
       POSTGRES_USER: xau_user
-      POSTGRES_PASSWORD: xau_secure_pass_2026
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in backend/.env}
       POSTGRES_DB: xau_pilot_db
     ports:
       - "5432:5432"
@@ -30,8 +30,8 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://xau_user:xau_secure_pass_2026@db:5432/xau_pilot_db
-      JWT_SECRET: xau_prod_jwt_super_secret_key_change_in_production_998124
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in backend/.env}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in backend/.env}
     ports:
       - "8000:8000"
 
