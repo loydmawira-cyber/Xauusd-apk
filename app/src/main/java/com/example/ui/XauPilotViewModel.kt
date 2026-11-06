@@ -159,22 +159,26 @@ class XauPilotViewModel(
         viewModelScope.launch {
             val policy = _selectedEmergencyPolicy.value
             _emergencyDialogVisible.value = false
-            repository.sendAccountCommand(accountId, CommandType.EMERGENCY_STOP, policy)
-            _userMessage.value = "Emergency Stop triggered on Account ($policy)"
+            val success = repository.sendAccountCommand(accountId, CommandType.EMERGENCY_STOP, policy)
+            _userMessage.value = if (success) {
+                "Emergency Stop triggered on Account ($policy)"
+            } else {
+                "Emergency Stop was rejected or could not be delivered"
+            }
         }
     }
 
     fun pauseAccount(accountId: String) {
         viewModelScope.launch {
-            repository.sendAccountCommand(accountId, CommandType.PAUSE)
-            _userMessage.value = "Paused all EAs on Account"
+            val success = repository.sendAccountCommand(accountId, CommandType.PAUSE)
+            _userMessage.value = if (success) "Paused all EAs on Account" else "Pause command failed"
         }
     }
 
     fun resumeAccount(accountId: String) {
         viewModelScope.launch {
-            repository.sendAccountCommand(accountId, CommandType.RESUME)
-            _userMessage.value = "Resumed active EAs on Account"
+            val success = repository.sendAccountCommand(accountId, CommandType.RESUME)
+            _userMessage.value = if (success) "Resumed active EAs on Account" else "Resume command failed"
         }
     }
 
