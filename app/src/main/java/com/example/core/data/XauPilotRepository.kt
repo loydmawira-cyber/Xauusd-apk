@@ -29,8 +29,10 @@ class XauPilotRepository private constructor(context: Context? = null) {
 
     private val _authSession = MutableStateFlow<AuthSession?>(
         AuthSession(
-            accessToken = "xau_sec_demo_token_889211",
-            refreshToken = "xau_sec_refresh_994124",
+            // Demo mode is intentionally local-only. Live credentials must come from the
+            // authentication flow and must never be committed to the APK source.
+            accessToken = "demo-session",
+            refreshToken = "demo-session",
             user = User(
                 id = "usr_pilot_01",
                 email = "trader@xaupilot.com",
@@ -473,7 +475,7 @@ class XauPilotRepository private constructor(context: Context? = null) {
     suspend fun sendAccountCommand(accountId: String, commandType: CommandType, emergencyPolicy: EmergencyStopPolicy? = null): Boolean {
         if (!_apiSettings.value.isDemoMode) {
             try {
-                when (commandType) {
+                val response = when (commandType) {
                     CommandType.PAUSE -> ApiClient.apiService.pauseAccount(accountId)
                     CommandType.RESUME -> ApiClient.apiService.resumeAccount(accountId)
                     CommandType.STOP -> ApiClient.apiService.pauseAccount(accountId)
@@ -481,6 +483,12 @@ class XauPilotRepository private constructor(context: Context? = null) {
                         accountId,
                         mapOf("policy" to (emergencyPolicy?.name ?: "CLOSE_NEW_ENTRIES_ONLY"))
                     )
+                }
+                if (!response.isSuccessful) {
+                    val reason = response.errorBody()?.string()?.takeIf { it.isNotBlank() }
+                        ?: "Server rejected the command (${response.code()})"
+                    addNotification("Command Rejected", reason, NotificationType.SYSTEM_SECURITY)
+                    return false
                 }
             } catch (e: Exception) {
                 addNotification("Command Failed", "Network failure: ${e.localizedMessage}", NotificationType.SYSTEM_SECURITY)
