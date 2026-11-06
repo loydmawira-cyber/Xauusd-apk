@@ -18,6 +18,7 @@ sealed class ScreenDestination {
     object RiskManagement : ScreenDestination()
     object Profile : ScreenDestination()
     object BridgeGuide : ScreenDestination()
+    object PublisherWorkspace : ScreenDestination()
 }
 
 class XauPilotViewModel(
@@ -35,6 +36,7 @@ class XauPilotViewModel(
     val accounts = repository.accounts
     val selectedAccountId = repository.selectedAccountId
     val eaProducts = repository.eaProducts
+    val eaSubmissions = repository.eaSubmissions
     val licenses = repository.licenses
     val installations = repository.installations
     val selectedInstallationId = repository.selectedInstallationId
@@ -56,6 +58,29 @@ class XauPilotViewModel(
 
     fun refreshBackend() {
         repository.syncFromBackend()
+    }
+
+    fun submitEaForReview(
+        name: String,
+        version: String,
+        fileName: String,
+        fileSizeBytes: Long,
+        category: StrategyCategory,
+        description: String,
+        monthlyPriceUsd: Double
+    ) {
+        repository.submitEaForReview(name, version, fileName, fileSizeBytes, category, description, monthlyPriceUsd)
+        _userMessage.value = "EA submitted for marketplace review"
+    }
+
+    fun approveEaSubmission(submissionId: String) {
+        repository.approveEaSubmission(submissionId)
+        _userMessage.value = "EA approved and published to the marketplace"
+    }
+
+    fun rejectEaSubmission(submissionId: String, note: String) {
+        repository.rejectEaSubmission(submissionId, note)
+        _userMessage.value = "EA returned to publisher for changes"
     }
 
     // Temporary draft values while in EA Settings screen
@@ -203,7 +228,7 @@ class XauPilotViewModel(
     // Assign EA
     fun assignEa(ea: EaProduct, account: BrokerAccount, magicNumber: Long, tf: String) {
         val inst = repository.assignEaToAccount(ea, account, magicNumber, tf)
-        _userMessage.value = "Successfully assigned ${ea.name} to ${account.label}"
+        _userMessage.value = "${ea.name} queued for ${account.label}; hosting link required before execution"
         navigateTo(ScreenDestination.EaSettings(inst.id))
     }
 
