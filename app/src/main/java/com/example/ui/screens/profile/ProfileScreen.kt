@@ -221,6 +221,36 @@ fun ProfileScreen(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        item {
+            SectionHeader(
+                title = "PUBLISHER WORKSPACE",
+                subtitle = "Submit, review, and publish compiled Expert Advisors"
+            )
+            Surface(
+                color = CharcoalSurface,
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, GoldPrimary.copy(alpha = 0.45f)),
+                modifier = Modifier.fillMaxWidth().clickable { viewModel.navigateTo(ScreenDestination.PublisherWorkspace) }
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, tint = GoldLight, modifier = Modifier.size(24.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text("Upload an EA for review", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = TextPrimaryDark)
+                            Text("Approved products appear in the customer marketplace", fontSize = 11.sp, color = TextSecondaryDark)
+                        }
+                    }
+                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextSecondaryDark)
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         // Regulatory & Financial Risk Disclosures
         item {
             SectionHeader(
