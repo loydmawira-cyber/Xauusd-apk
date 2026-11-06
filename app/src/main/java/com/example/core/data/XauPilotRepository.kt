@@ -57,6 +57,10 @@ class XauPilotRepository private constructor(context: Context? = null) {
     private val _eaProducts = MutableStateFlow<List<EaProduct>>(createInitialEaProducts())
     val eaProducts: StateFlow<List<EaProduct>> = _eaProducts.asStateFlow()
 
+    // Publisher pipeline: upload -> review -> marketplace approval.
+    private val _eaSubmissions = MutableStateFlow<List<EaSubmission>>(createInitialEaSubmissions())
+    val eaSubmissions: StateFlow<List<EaSubmission>> = _eaSubmissions.asStateFlow()
+
     // Licenses
     private val _licenses = MutableStateFlow<List<EaLicense>>(createInitialLicenses())
     val licenses: StateFlow<List<EaLicense>> = _licenses.asStateFlow()
@@ -265,6 +269,64 @@ class XauPilotRepository private constructor(context: Context? = null) {
 
     fun selectInstallation(installationId: String) {
         _selectedInstallationId.value = installationId
+    }
+
+    fun submitEaForReview(
+        name: String,
+        version: String,
+        fileName: String,
+        fileSizeBytes: Long,
+        category: StrategyCategory,
+        description: String,
+        monthlyPriceUsd: Double
+    ): EaSubmission {
+        val submission = EaSubmission(
+            id = "sub_${UUID.randomUUID().toString().take(8)}",
+            publisherId = _authSession.value?.user?.id ?: "publisher_demo",
+            publisherName = _authSession.value?.user?.fullName ?: "Demo Publisher",
+            name = name.trim().ifBlank { "Untitled EA" },
+            version = version.trim().ifBlank { "1.0.0" },
+            fileName = fileName,
+            fileSizeBytes = fileSizeBytes,
+            strategyCategory = category,
+            description = description.trim(),
+            monthlyPriceUsd = monthlyPriceUsd.coerceAtLeast(0.0),
+            status = EaSubmissionStatus.SUBMITTED,
+            submittedAtUtc = currentUtc()
+        )
+        _eaSubmissions.update { listOf(submission) + it }
+        addNotification("EA Submitted", "${submission.name} is awaiting marketplace review", NotificationType.SYSTEM_SECURITY)
+        return submission
+    }
+
+    fun approveEaSubmission(submissionId: String) {
+        val submission = _eaSubmissions.value.find { it.id == submissionId } ?: return
+        _eaSubmissions.update { list -> list.map { if (it.id == submissionId) it.copy(status = EaSubmissionStatus.APPROVED) else it } }
+        val product = EaProduct(
+            id = "ea_${submission.id}",
+            productCode = "PUB-${submission.id.takeLast(6).uppercase()}",
+            name = submission.name,
+            description = submission.description,
+            strategyCategory = submission.strategyCategory,
+            currentVersion = submission.version,
+            defaultMagicNumber = 700000L + Random.nextLong(10000, 99999),
+            releaseNotes = "Initial publisher release ${submission.version}",
+            riskDisclosures = "Automated trading involves substantial risk. Test on a demo account before live use.",
+            documentationUrl = "",
+            monthlyPriceUsd = submission.monthlyPriceUsd,
+            annualPriceUsd = submission.monthlyPriceUsd * 10,
+            lifetimePriceUsd = submission.monthlyPriceUsd * 24,
+            isPublished = true,
+            rating = 0.0,
+            activeTradersCount = 0
+        )
+        _eaProducts.update { products -> if (products.any { it.id == product.id }) products else products + product }
+        addNotification("EA Approved", "${submission.name} is now visible in the marketplace", NotificationType.TRADE_EVENT)
+    }
+
+    fun rejectEaSubmission(submissionId: String, note: String) {
+        _eaSubmissions.update { list -> list.map { if (it.id == submissionId) it.copy(status = EaSubmissionStatus.REJECTED, reviewNote = note) else it } }
+        addNotification("EA Review Update", "Submission returned for changes", NotificationType.SYSTEM_SECURITY)
     }
 
     fun toggleDemoMode(isDemo: Boolean) {
@@ -717,9 +779,10 @@ class XauPilotRepository private constructor(context: Context? = null) {
             magicNumber = magicNumber,
             symbol = "XAUUSD",
             timeframe = timeframe,
-            runtimeStatus = EaRuntimeStatus.RUNNING,
+            // Hosting integration is intentionally deferred; never claim live execution here.
+            runtimeStatus = EaRuntimeStatus.DISCONNECTED,
             currentConfigVersion = 1,
-            configStatus = ConfigStatus.APPLIED,
+            configStatus = ConfigStatus.DRAFT,
             currentValues = defaults,
             lastHeartbeatUtc = currentUtc(),
             hostingType = account.hostingType
@@ -733,7 +796,7 @@ class XauPilotRepository private constructor(context: Context? = null) {
             dao?.insertInstallation(newInst.toEntity())
             if (!_apiSettings.value.isDemoMode) {
                 try {
-                    ApiClient.apiService.createInstallation(
+                    val createResponse = ApiClient.apiService.createInstallation(
                         mapOf(
                             "eaProductId" to eaProduct.id,
                             "brokerAccountId" to account.id,
@@ -741,12 +804,19 @@ class XauPilotRepository private constructor(context: Context? = null) {
                             "timeframe" to timeframe
                         )
                     )
+                    if (createResponse.isSuccessful) {
+                        val remoteInstallationId = createResponse.body()?.id ?: newInst.id
+                        val hostingResponse = ApiClient.apiService.provisionInstallationHost(remoteInstallationId)
+                        if (!hostingResponse.isSuccessful) {
+                            addNotification("Hosting Queued", "EA installation created, but hosting provisioning needs attention", NotificationType.VPS_STATUS)
+                        }
+                    }
                 } catch (e: Exception) {
                     android.util.Log.e("XauPilotRepository", "Remote EA installation failed: ${e.message}")
                 }
             }
         }
-        addNotification("EA Assigned", "${eaProduct.name} assigned to ${account.label} (Magic #$magicNumber)", NotificationType.TRADE_EVENT)
+        addNotification("EA Queued", "${eaProduct.name} assigned to ${account.label}; link hosting to start execution", NotificationType.VPS_STATUS)
         return newInst
     }
 
@@ -1230,6 +1300,23 @@ class XauPilotRepository private constructor(context: Context? = null) {
             assignedEaCount = 1,
             lastHeartbeatUtc = currentUtc(),
             hostingType = HostingType.CUSTOMER_HOSTED
+        )
+    )
+
+    private fun createInitialEaSubmissions(): List<EaSubmission> = listOf(
+        EaSubmission(
+            id = "sub_demo_review",
+            publisherId = "publisher_demo",
+            publisherName = "Pilot Research Lab",
+            name = "London Gold Pulse",
+            version = "1.0.0",
+            fileName = "LondonGoldPulse.ex5",
+            fileSizeBytes = 284_672,
+            strategyCategory = StrategyCategory.GOLD_BREAKOUT,
+            description = "Session breakout EA with spread and news protection.",
+            monthlyPriceUsd = 59.0,
+            status = EaSubmissionStatus.SUBMITTED,
+            submittedAtUtc = "2026-11-06 15:00:00"
         )
     )
 
