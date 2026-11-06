@@ -75,6 +75,13 @@ interface ApiService {
     @POST("ea-installations/{id}/uninstall")
     suspend fun uninstallInstallation(@Path("id") id: String): Response<Unit>
 
+    // Provider-neutral VPS and MT5 hosting adapter
+    @POST("hosting/installations/{id}/provision")
+    suspend fun provisionInstallationHost(@Path("id") id: String): Response<Map<String, Any>>
+
+    @GET("hosting/installations/{id}/jobs")
+    suspend fun getHostingJobs(@Path("id") id: String): Response<List<Map<String, Any?>>>
+
     // EA Configuration & Remote Inputs
     @GET("ea-installations/{id}/inputs")
     suspend fun getInputDefinitions(@Path("id") id: String): Response<List<ParameterDefinition>>
